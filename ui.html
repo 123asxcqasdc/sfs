@@ -100,9 +100,10 @@
 
     <!-- ============================= LOAD ============================= -->
     <div class="panel">
-      <h2>открыть .sfs</h2>
-      <div class="drop" id="drop">перетащите файл .sfs сюда<br>или нажмите для выбора</div>
-      <input type="file" id="file" accept=".sfs,.bin" style="display:none">
+      <h2>открыть .sfs · импорт .zip</h2>
+      <div class="drop" id="drop">перетащите .sfs или .zip сюда<br>или нажмите для выбора<br><span style="font-size:11px">.zip → распаковка в дерево → подписанный .sfs</span></div>
+      <input type="file" id="file" accept=".sfs,.bin,.zip" style="display:none">
+      <div style="margin-top:8px"><button type="button" id="btnZipConv" class="ghost" style="display:none">ZIP → SFS (с подписью)</button></div>
     </div>
 
     <!-- ============================= VERIFY ============================= -->
@@ -281,8 +282,13 @@ drop.addEventListener('click', ()=> document.getElementById('file').click());
 drop.addEventListener('dragover', e=>{ e.preventDefault(); drop.classList.add('over'); });
 drop.addEventListener('dragleave', ()=> drop.classList.remove('over'));
 drop.addEventListener('drop', e=>{ e.preventDefault(); drop.classList.remove('over');
-  if(e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
-document.getElementById('file').addEventListener('change', e=>{ if(e.target.files[0]) loadFile(e.target.files[0]); });
+  const f = e.dataTransfer.files[0]; if(f) handleDropped(f); });
+document.getElementById('file').addEventListener('change', e=>{ if(e.target.files[0]) handleDropped(e.target.files[0]); });
+
+function handleDropped(file){
+  if(/\.zip$/i.test(file.name)) loadZipFile(file);
+  else loadFile(file);
+}
 
 function loadFile(file){
   const fr = new FileReader();
@@ -306,6 +312,120 @@ function fromFsNode(n, isRoot){
   return { type:'file', name, content: bytesToStr(n.content||new Uint8Array(0)), children:[] };
 }
 function countNodes(list){ return list.reduce((a,n)=> a + 1 + (n.children? countNodes(n.children):0), 0); }
+
+// ---------- ZIP → SFS ----------
+async function inflateRaw(bytes){
+  const ds = new DecompressionStream('deflate-raw');
+  const stream = new Blob([bytes]).stream().pipeThrough(ds);
+  const buf = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buf);
+}
+
+// Читает ZIP без библиотек: EOCD → центральный каталог → локальные заголовки.
+// Имена и содержимое сохраняются как сырые байты (0x00-0xFF).
+async function parseZip(ab){
+  const dv = new DataView(ab);
+  if(dv.byteLength < 22) throw new Error('слишком мал для ZIP');
+  let eocd = -1;
+  const min = Math.max(0, dv.byteLength - 65557);
+  for(let i = dv.byteLength - 22; i >= min; i--){
+    if(dv.getUint32(i,true) === 0x06054b50){
+      const clen = dv.getUint16(i+20,true);
+      if(i + 22 + clen === dv.byteLength){ eocd = i; break; }
+    }
+  }
+  if(eocd < 0) throw new Error('EOCD не найден — это не ZIP');
+  const total = dv.getUint16(eocd+10,true);
+  let p = dv.getUint32(eocd+16,true);
+
+  const metas = [];
+  for(let n=0;n<total;n++){
+    if(dv.getUint32(p,true) !== 0x02014b50) throw new Error('центральный каталог повреждён (запись '+(n+1)+')');
+    const isZip64 = dv.getUint32(p+4,true) === 0xffffffff || dv.getUint32(p+20,true) === 0xffffffff
+                 || dv.getUint32(p+24,true) === 0xffffffff || dv.getUint32(p+42,true) === 0xffffffff;
+    if(isZip64) throw new Error('zip64 не поддерживается');
+    const method = dv.getUint16(p+10,true);
+    const csize = dv.getUint32(p+20,true);
+    const nlen = dv.getUint16(p+28,true);
+    const elen = dv.getUint16(p+30,true);
+    const clen = dv.getUint16(p+32,true);
+    const lho = dv.getUint32(p+42,true);
+    const nameBytes = new Uint8Array(ab, p+46, nlen);
+    metas.push({ method, csize, lho,
+      isDir: nlen>0 && nameBytes[nlen-1] === 0x2f,
+      name: bytesToStr(nameBytes) }); // latin1: байты как есть
+    p += 46 + nlen + elen + clen;
+  }
+
+  const entries = [];
+  for(const e of metas){
+    const lv = new DataView(ab, e.lho);
+    if(lv.byteLength <= 30 || lv.getUint32(0,true) !== 0x04034b50) throw new Error('локальный заголовок "'+e.name+'" не найден');
+    const nlen = lv.getUint16(26,true);
+    const elen = lv.getUint16(28,true);
+    const dataStart = e.lho + 30 + nlen + elen;
+    let bytes = new Uint8Array(0);
+    if(!e.isDir){
+      if(e.method === 0){ bytes = new Uint8Array(ab, dataStart, e.csize); }
+      else if(e.method === 8){ bytes = await inflateRaw(new Uint8Array(ab, dataStart, e.csize)); }
+      else throw new Error('ZIP-метод '+e.method+' не поддерживается (только stored/deflate)');
+    }
+    entries.push({ name: e.name, isDir: e.isDir, bytes });
+  }
+  return entries;
+}
+
+function zipToNodes(entries){
+  const seg = n => n.name.split('/').filter(s=>s.length>0);
+  const findDir = (segs) => {
+    let level = root;
+    for(const s of segs){
+      let d = level.find(n=> n.type==='dir' && n.name===s);
+      if(!d){ d={type:'dir',name:s,content:'',children:[]}; level.push(d); }
+      level = d.children;
+    }
+    return level;
+  };
+  root = [];
+  for(const e of entries){
+    const s = seg(e);
+    const nm = s.pop();
+    if(e.isDir){ findDir([nm]); }
+    else { findDir(s).push({ type:'file', name:nm, content: bytesToStr(e.bytes), children:[] }); }
+  }
+  return root;
+}
+
+function resetVerify(){
+  document.getElementById('verifyResult').innerHTML = '<span class="pill muted">дерево из ZIP — не проверено</span>';
+}
+
+function loadZipFile(file){
+  const fr = new FileReader();
+  fr.onload = async ()=>{
+    try{
+      const entries = await parseZip(fr.result);
+      zipToNodes(entries);
+      document.getElementById('btnZipConv').style.display = '';
+      resetVerify();
+      clearStatus();
+      log('✓ ZIP распакован: файлов '+entries.filter(x=>!x.isDir).length+', вложенность сохранена');
+      log('  имена/контент — сырые байты (latin1); дерево в редакторе можно править');
+      renderTree();
+    }catch(e){ log('✖ ZIP: '+e.message); }
+  };
+  fr.readAsArrayBuffer(file);
+}
+
+document.getElementById('btnZipConv').onclick = ()=>{
+  if(!document.getElementById('seedHex').value.trim()){
+    const kp = window.Ed25519.generateKeyPair();
+    document.getElementById('seedHex').value = bytesToHex(kp.seed);
+    document.getElementById('pubOut').value = bytesToHex(kp.publicKey);
+    log('⚠ не было ключа — сгенерирован новый. Сохраните его: кнопка «экспорт ключа»');
+  }
+  downloadBlob(pack(true), 'converted.sfs');
+};
 
 // ---------- verify ----------
 function updateVerify(r){

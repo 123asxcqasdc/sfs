@@ -145,6 +145,11 @@
 
 <script src="ed25519.js"></script>
 <script src="parser.js"></script>
+<!-- веб-декомпрессоры zip-методов: bzip2 (12), LZMA (14), zstd (95) -->
+<script src="vendor/fzstd.js"></script>
+<script src="vendor/lzma.js"></script>
+<script src="vendor/bzip2.js"></script>
+<script src="zip-dec.js"></script>
 <script>
 "use strict";
 
@@ -314,14 +319,8 @@ function fromFsNode(n, isRoot){
 function countNodes(list){ return list.reduce((a,n)=> a + 1 + (n.children? countNodes(n.children):0), 0); }
 
 // ---------- ZIP → SFS ----------
-async function inflateRaw(bytes){
-  const ds = new DecompressionStream('deflate-raw');
-  const stream = new Blob([bytes]).stream().pipeThrough(ds);
-  const buf = await new Response(stream).arrayBuffer();
-  return new Uint8Array(buf);
-}
-
-// Читает ZIP без библиотек: EOCD → центральный каталог → локальные заголовки.
+// Читает ZIP: EOCD → центральный каталог → локальные заголовки; распаковка
+// методов 0/8/12/14/95 через window.ZipDec (см. zip-dec.js и vendor/*.js).
 // Имена и содержимое сохраняются как сырые байты (0x00-0xFF).
 async function parseZip(ab){
   const dv = new DataView(ab);
@@ -346,12 +345,13 @@ async function parseZip(ab){
     if(isZip64) throw new Error('zip64 не поддерживается');
     const method = dv.getUint16(p+10,true);
     const csize = dv.getUint32(p+20,true);
+    const usize = dv.getUint32(p+24,true);
     const nlen = dv.getUint16(p+28,true);
     const elen = dv.getUint16(p+30,true);
     const clen = dv.getUint16(p+32,true);
     const lho = dv.getUint32(p+42,true);
     const nameBytes = new Uint8Array(ab, p+46, nlen);
-    metas.push({ method, csize, lho,
+    metas.push({ method, csize, usize, lho,
       isDir: nlen>0 && nameBytes[nlen-1] === 0x2f,
       name: bytesToStr(nameBytes) }); // latin1: байты как есть
     p += 46 + nlen + elen + clen;
@@ -366,9 +366,7 @@ async function parseZip(ab){
     const dataStart = e.lho + 30 + nlen + elen;
     let bytes = new Uint8Array(0);
     if(!e.isDir){
-      if(e.method === 0){ bytes = new Uint8Array(ab, dataStart, e.csize); }
-      else if(e.method === 8){ bytes = await inflateRaw(new Uint8Array(ab, dataStart, e.csize)); }
-      else throw new Error('ZIP-метод '+e.method+' не поддерживается (только stored/deflate)');
+      bytes = await window.ZipDec.decode(e.method, new Uint8Array(ab, dataStart, e.csize), { size: e.usize });
     }
     entries.push({ name: e.name, isDir: e.isDir, bytes });
   }

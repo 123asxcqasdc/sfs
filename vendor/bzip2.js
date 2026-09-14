@@ -154,7 +154,7 @@ Stream.prototype.write = function(buffer, bufOffset, length) {
 Stream.prototype.flush = function() {
 };
 
-module.exports = Stream;
+if (typeof module !== 'undefined') module.exports = Stream;
 
 /*
 node-bzip - a pure-javascript Node.JS module for decoding bzip2 data

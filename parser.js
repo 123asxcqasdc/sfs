@@ -402,4 +402,6 @@ if (typeof window !== "undefined") {
   window.FsParser = FsParser;
   window.FsNode = FsNode;
   window.sha256 = sha256;
+  window.TYPE_FILE = TYPE_FILE;
+  window.TYPE_DIR = TYPE_DIR;
 }

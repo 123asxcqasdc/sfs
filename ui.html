@@ -50,9 +50,27 @@
   .pill.ok { background:#3fb95022; color:var(--ok); border:1px solid var(--ok); }
   .pill.bad { background:#f8514922; color:var(--bad); border:1px solid var(--bad); }
   .pill.muted { background:#8b949e22; color:var(--muted); border:1px solid var(--border); }
-  .drop { border:2px dashed var(--border); border-radius:8px; padding:22px; text-align:center;
-          color:var(--muted); cursor:pointer; }
-  .drop.over { border-color:var(--accent); color:var(--accent); }
+  .drop { border:2px dashed var(--border); border-radius:10px; padding:24px 18px; text-align:center;
+          color:var(--muted); cursor:pointer; transition:border-color .15s, background .15s; }
+  .drop:hover { border-color:#8b949e88; }
+  .drop.over { border-color:var(--accent); color:var(--accent); background:#58a6ff0d; }
+  .drop .di { font-size:30px; line-height:1; margin-bottom:6px; color:var(--accent); }
+  .drop .dt { font-size:14px; font-weight:700; color:var(--fg); }
+  .drop .ds { font-size:12px; margin-top:2px; }
+  .methods { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; justify-content:center; }
+  .methods .m { font-size:11px; padding:1px 9px; border-radius:10px; border:1px solid var(--border);
+                color:var(--muted); background:#0d1117; }
+  .methods .m.ok { border-color:#2ea04377; color:#7ee787; background:#2386361a; }
+  .methods .m.no { border-color:#8b949e33; color:#8b949e66; text-decoration:line-through; }
+  .zip-info { display:none; margin-top:10px; padding:8px 10px; border:1px solid var(--border);
+              border-left:3px solid var(--ok); background:#0d1117; border-radius:6px; font-size:12px; }
+  .zip-info.show { display:block; }
+  .zip-info b { color:var(--fg); }
+  .btn-conv { width:100%; margin-top:10px; padding:10px 12px; color:#f0fff4; font-weight:700;
+              background:linear-gradient(180deg, #2ea043, #238636); border-radius:8px;
+              box-shadow:0 0 0 1px #2ea04388 inset, 0 2px 6px #23863633; }
+  .btn-conv:hover:not(:disabled) { filter:brightness(1.08); }
+  .btn-conv:disabled { opacity:.5; cursor:not-allowed; }
   ul.files { list-style:none; padding:0; margin:0; }
   ul.files li { padding:3px 6px; border-radius:4px; }
   ul.files li.odd { background:#0d1117; }
@@ -98,12 +116,24 @@
       <p class="hint">Упаковка без подписи → только SHA-256 целостность. Упаковка с подписью → Ed25519 поверх хеша; нужен валидный seed.</p>
     </div>
 
-    <!-- ============================= LOAD ============================= -->
+    <!-- ============================= CONVERTER ============================= -->
     <div class="panel">
-      <h2>открыть .sfs · импорт .zip</h2>
-      <div class="drop" id="drop">перетащите .sfs или .zip сюда<br>или нажмите для выбора<br><span style="font-size:11px">.zip → распаковка в дерево → подписанный .sfs</span></div>
+      <h2>конвертер файлов · zip → sfs</h2>
+      <p class="hint">Перетащите архив — он распакуется в дерево; затем одной кнопкой соберёте подписанный
+      <code>.sfs</code>. Имена и содержимое сохраняются по байтам (0x00–0xFF).</p>
+      <div class="drop" id="drop">
+        <div class="di">⬇</div>
+        <div class="dt">перетащите .zip или .sfs сюда</div>
+        <div class="ds">или нажмите для выбора файла</div>
+        <div class="methods" title="поддерживаемые методы сжатия ZIP">
+          <span class="m ok">stored</span><span class="m ok">deflate</span><span class="m ok">bzip2</span>
+          <span class="m ok">LZMA</span><span class="m ok">zstd</span>
+          <span class="m no">deflate64</span><span class="m no">PPMd</span><span class="m no">AES</span>
+        </div>
+      </div>
       <input type="file" id="file" accept=".sfs,.bin,.zip" style="display:none">
-      <div style="margin-top:8px"><button type="button" id="btnZipConv" class="ghost" style="display:none">ZIP → SFS (с подписью)</button></div>
+      <div class="zip-info" id="zipInfo"></div>
+      <button type="button" id="btnZipConv" class="btn-conv" style="display:none">⟳ конвертировать в подписанный .sfs</button>
     </div>
 
     <!-- ============================= VERIFY ============================= -->
@@ -296,6 +326,7 @@ function handleDropped(file){
 }
 
 function loadFile(file){
+  resetZipInfo();
   const fr = new FileReader();
   fr.onload = ()=>{
     try{
@@ -368,7 +399,7 @@ async function parseZip(ab){
     if(!e.isDir){
       bytes = await window.ZipDec.decode(e.method, new Uint8Array(ab, dataStart, e.csize), { size: e.usize });
     }
-    entries.push({ name: e.name, isDir: e.isDir, bytes });
+    entries.push({ name: e.name, isDir: e.isDir, method: e.method, bytes });
   }
   return entries;
 }
@@ -398,6 +429,24 @@ function resetVerify(){
   document.getElementById('verifyResult').innerHTML = '<span class="pill muted">дерево из ZIP — не проверено</span>';
 }
 
+const ZIP_METHOD_NAMES = { 0:'stored', 8:'deflate', 12:'bzip2', 14:'LZMA', 95:'zstd' };
+function fmtSize(n){ return n < 1024 ? n+' Б' : n < 1048576 ? (n/1024).toFixed(1)+' КБ' : (n/1048576).toFixed(2)+' МБ'; }
+function resetZipInfo(){
+  const zi = document.getElementById('zipInfo'), btn = document.getElementById('btnZipConv');
+  zi.classList.remove('show'); zi.innerHTML=''; btn.style.display='none'; btn.disabled=false;
+}
+function showZipInfo(entries){
+  const zi = document.getElementById('zipInfo'), btn = document.getElementById('btnZipConv');
+  const files = entries.filter(e=>!e.isDir);
+  const tot = entries.reduce((a,e)=>a+e.bytes.length,0);
+  const meths = [...new Set(files.map(e=>e.method))].sort((a,b)=>a-b);
+  zi.innerHTML =
+    'файлов: <b>'+files.length+'</b> · размер контента: <b>'+fmtSize(tot)+'</b> · ' +
+    'метод'+(meths.length>1?'ы':'')+': <b>'+(meths.map(m=>ZIP_METHOD_NAMES[m]||m).join(', '))+'</b>';
+  zi.classList.add('show');
+  btn.style.display = '';
+}
+
 function loadZipFile(file){
   const fr = new FileReader();
   fr.onload = async ()=>{
@@ -405,6 +454,7 @@ function loadZipFile(file){
       const entries = await parseZip(fr.result);
       zipToNodes(entries);
       document.getElementById('btnZipConv').style.display = '';
+      showZipInfo(entries);
       resetVerify();
       clearStatus();
       log('✓ ZIP распакован: файлов '+entries.filter(x=>!x.isDir).length+', вложенность сохранена');
@@ -416,13 +466,18 @@ function loadZipFile(file){
 }
 
 document.getElementById('btnZipConv').onclick = ()=>{
-  if(!document.getElementById('seedHex').value.trim()){
-    const kp = window.Ed25519.generateKeyPair();
-    document.getElementById('seedHex').value = bytesToHex(kp.seed);
-    document.getElementById('pubOut').value = bytesToHex(kp.publicKey);
-    log('⚠ не было ключа — сгенерирован новый. Сохраните его: кнопка «экспорт ключа»');
-  }
-  downloadBlob(pack(true), 'converted.sfs');
+  const btn = document.getElementById('btnZipConv');
+  btn.disabled = true;
+  try{
+    if(!document.getElementById('seedHex').value.trim()){
+      const kp = window.Ed25519.generateKeyPair();
+      document.getElementById('seedHex').value = bytesToHex(kp.seed);
+      document.getElementById('pubOut').value = bytesToHex(kp.publicKey);
+      log('⚠ не было ключа — сгенерирован новый. Сохраните его: кнопка «экспорт ключа»');
+    }
+    downloadBlob(pack(true), 'converted.sfs');
+  }catch(e){ log('✖ ' + e.message); }
+  btn.disabled = false;
 };
 
 // ---------- verify ----------

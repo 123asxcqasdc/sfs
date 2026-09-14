@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SFS — Simple File System Studio</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#161b22; --border:#2d333b; --fg:#e6edf3;
+    --muted:#8b949e; --accent:#58a6ff; --ok:#3fb950; --bad:#f85149; --warn:#d29922;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  header { padding:14px 20px; border-bottom:1px solid var(--border);
+           background:linear-gradient(180deg,#161b22,#0f1115); }
+  header h1 { margin:0; font-size:18px; letter-spacing:.5px; }
+  header code { color:var(--accent); background:#0f1115; padding:2px 6px; border-radius:4px; }
+  main { display:grid; grid-template-columns:380px 1fr 380px; gap:14px; padding:14px; }
+  @media (max-width:1100px){ main { grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--border); border-radius:8px;
+           padding:12px 14px; margin-bottom:14px; }
+  .panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:1px; color:var(--muted);
+              margin:0 0 10px; }
+  label { display:block; color:var(--muted); font-size:12px; margin:8px 0 4px; }
+  input[type=text], textarea, select {
+    width:100%; background:#0d1117; border:1px solid var(--border); color:var(--fg);
+    border-radius:6px; padding:7px 9px; font:inherit; }
+  textarea { resize:vertical; min-height:60px; }
+  button { background:var(--accent); color:#0d1117; border:none; border-radius:6px;
+           padding:8px 12px; font:inherit; font-weight:600; cursor:pointer; margin:4px 4px 4px 0; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  button.warn { background:transparent; color:var(--bad); border:1px solid var(--bad); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  .mono { font-family:inherit; }
+  .tree-panel { overflow:auto; max-height:70vh; }
+  .node { margin:3px 0; padding-left:14px; border-left:1px dashed var(--border); }
+  .node-row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; background:#0d1117;
+              border:1px solid var(--border); border-radius:6px; padding:4px 6px; margin:2px 0; }
+  .node-row .kind { width:76px; }
+  .node-row input { flex:1; min-width:120px; }
+  .badge { display:inline-block; font-size:11px; padding:1px 6px; border-radius:10px;
+           background:var(--border); color:var(--muted); }
+  .badge.dir { background:#1f6feb33; color:#79c0ff; }
+  .badge.file { background:#3fb95033; color:#7ee787; }
+  .status { font-size:12px; white-space:pre-wrap; word-break:break-all;
+            background:#0d1117; border:1px solid var(--border); border-radius:6px;
+            padding:8px; min-height:80px; max-height:300px; overflow:auto; }
+  .pill { display:inline-block; padding:2px 10px; border-radius:12px; font-weight:700; margin:2px 6px 2px 0; }
+  .pill.ok { background:#3fb95022; color:var(--ok); border:1px solid var(--ok); }
+  .pill.bad { background:#f8514922; color:var(--bad); border:1px solid var(--bad); }
+  .pill.muted { background:#8b949e22; color:var(--muted); border:1px solid var(--border); }
+  .drop { border:2px dashed var(--border); border-radius:8px; padding:22px; text-align:center;
+          color:var(--muted); cursor:pointer; }
+  .drop.over { border-color:var(--accent); color:var(--accent); }
+  ul.files { list-style:none; padding:0; margin:0; }
+  ul.files li { padding:3px 6px; border-radius:4px; }
+  ul.files li.odd { background:#0d1117; }
+  .hint { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SFS&nbsp;<code>SFSY</code>&nbsp;— Simple File System Studio&nbsp;<span class="hint">v2 · подпись Ed25519 · все 256 значений байта</span></h1>
+</header>
+
+<main>
+
+  <div>
+    <!-- ============================= KEYS ============================= -->
+    <div class="panel">
+      <h2>ключи издателя</h2>
+      <label>секретный seed (64 hex симв.)</label>
+      <input type="text" id="seedHex" placeholder="оставьте пустым для unsigned-упаковки" spellcheck="false">
+      <div>
+        <button type="button" id="genSeed">генератор ключа</button>
+        <button type="button" id="clrSeed" class="ghost">очистить</button>
+      </div>
+      <div>
+        <button type="button" id="exportKey" class="ghost">экспорт ключа (.json)</button>
+        <button type="button" id="exportPub" class="ghost">экспорт pubkey (.pub)</button>
+        <button type="button" id="importKey" class="ghost">импорт ключа</button>
+      </div>
+      <input type="file" id="importKeyFile" accept=".json,.pub,.txt,.sfs" style="display:none">
+      <label>публичный ключ текущего ключа</label>
+      <input type="text" id="pubOut" readonly placeholder="—">
+      <label>доверенные издатели (pubkey, по одной на строку)</label>
+      <textarea id="trustList" rows="3" spellcheck="false"></textarea>
+      <button type="button" id="addTrust" class="ghost">добавить текущий pubkey</button>
+    </div>
+
+    <!-- ============================= TOOLBAR ============================= -->
+    <div class="panel">
+      <h2>упаковка</h2>
+      <button type="button" id="btnUnsigned">Упаковать без подписи</button>
+      <div style="margin-top:4px"><button type="button" id="btnSigned">Упаковать с подписью</button></div>
+      <div id="dlRoot" style="margin-top:8px"></div>
+      <p class="hint">Упаковка без подписи → только SHA-256 целостность. Упаковка с подписью → Ed25519 поверх хеша; нужен валидный seed.</p>
+    </div>
+
+    <!-- ============================= LOAD ============================= -->
+    <div class="panel">
+      <h2>открыть .sfs</h2>
+      <div class="drop" id="drop">перетащите файл .sfs сюда<br>или нажмите для выбора</div>
+      <input type="file" id="file" accept=".sfs,.bin" style="display:none">
+    </div>
+
+    <!-- ============================= VERIFY ============================= -->
+    <div class="panel">
+      <h2>проверка</h2>
+      <div id="verifyResult"><span class="pill muted">ничего не проверено</span></div>
+      <div class="status" id="status">—</div>
+    </div>
+  </div>
+
+  <!-- ============================= TREE EDITOR ============================= -->
+  <div class="panel">
+    <h2>дерево (редактор)</h2>
+    <div>
+      <button type="button" id="addFile" class="ghost">+ файл</button>
+      <button type="button" id="addDir" class="ghost">+ каталог</button>
+      <button type="button" id="loadDemo" class="ghost">демо-дерево</button>
+      <button type="button" id="clearTree" class="warn">очистить</button>
+    </div>
+    <div class="tree-panel" id="treeView"></div>
+  </div>
+
+  <!-- ============================= INFO ============================= -->
+  <div class="panel">
+    <h2>формат</h2>
+    <p class="hint">
+      <b>[0-3]</b> magic "SFSY"<br>
+      <b>[4-7]</b> version=2 · root_count<br>
+      <b>[8-39]</b> SHA-256 всех байт от offset&nbsp;144<br>
+      <b>[40-71]</b> pubkey издателя (32 Б)<br>
+      <b>[72-79]</b> signer_id = SHA-256(pubkey)[0..7]<br>
+      <b>[80-143]</b> Ed25519 подпись (64 Б) над header[0..79]+дерево<br>
+      <b>[144..]</b> дерево: type · name_len · name · (dir: child_count | file: content_len + content)<br><br>
+      Имена и содержимое — любые байты 0x00–0xFF.
+    </p>
+  </div>
+
+</main>
+
+<script src="ed25519.js"></script>
+<script src="parser.js"></script>
+<script>
+"use strict";
+
+// ---------- helpers ----------
+function strToBytes(s){ const b = new Uint8Array(s.length); for(let i=0;i<s.length;i++) b[i] = s.charCodeAt(i)&0xff; return b; }
+function bytesToStr(b){ let s=""; for(let i=0;i<b.length;i++) s+=String.fromCharCode(b[i]); return s; }
+function hexToBytes(hex){ hex=hex.replace(/\s+/g,'').replace(/0x/gi,''); if(hex.length%2) throw new Error("нечётная длина hex");
+  const u=new Uint8Array(hex.length/2); for(let i=0;i<u.length;i++) u[i]=parseInt(hex.substr(i*2,2),16); return u; }
+function bytesToHex(b){ return Array.from(b).map(x=>x.toString(16).padStart(2,'0')).join(''); }
+
+// ---------- model / state ----------
+// node = { type: 'file'|'dir', name: string, content: string, children: node[] }
+let root = [{ type:'dir', name:'/', content:'', children:[] }];
+
+function currentNode(id){ return root[id]; }
+
+// ---------- tree rendering ----------
+function renderTree(){
+  const tv = document.getElementById('treeView');
+  tv.innerHTML = '';
+  root.forEach((node,i)=> tv.appendChild(renderNode(node, i)));
+  tv.addEventListener('expand', (e)=>{ e.target.parentElement.querySelector('.kids').style.display = e.target.parentElement.querySelector('.kids').style.display==='none'?'block':'none'; });
+}
+function renderNode(node, id){
+  const wrap = document.createElement('div'); wrap.className='node';
+  const row = document.createElement('div'); row.className='node-row';
+  const kind = document.createElement('span'); kind.className='badge '+(node.type==='dir'?'dir':'file');
+  kind.textContent = node.type==='dir'?'каталог':'файл';
+  const nameInput = document.createElement('input'); nameInput.type='text'; nameInput.value=node.name;
+  nameInput.addEventListener('input', ()=> node.name = nameInput.value);
+  row.appendChild(kind); row.appendChild(nameInput);
+
+  const bAddF = document.createElement('button'); bAddF.className='ghost'; bAddF.textContent='+ф';
+  bAddF.addEventListener('click', ()=> node.children.push({type:'file',name:'new.bin',content:'',children:[]}));
+  const bAddD = document.createElement('button'); bAddD.className='ghost'; bAddD.textContent='+д';
+  bAddD.addEventListener('click', ()=> node.children.push({type:'dir',name:'newdir',content:'',children:[]}));
+  const bDel = document.createElement('button'); bDel.className='warn'; bDel.textContent='✕';
+  bDel.addEventListener('click', ()=>{ if(node._rm) node._rm(); renderTree(); });
+
+  const kids = document.createElement('div'); kids.className='kids';
+  const kidsList = document.createElement('div');
+  node.children.forEach((c,i)=>{
+    const childWrap = renderNode(c, -1);
+    c._rm = ()=> node.children.splice(node.children.indexOf(c),1);
+    kidsList.appendChild(childWrap);
+  });
+  kids.appendChild(kidsList);
+
+  if(node.type==='file'){
+    const contentArea = document.createElement('textarea');
+    contentArea.rows=2; contentArea.placeholder='содержимое (любые символы, latin1)';
+    contentArea.value = node.content || '';
+    contentArea.addEventListener('input', ()=> node.content = contentArea.value);
+    row.appendChild(bAddF); row.appendChild(bDel);
+    wrap.appendChild(row);
+    wrap.appendChild(contentArea);
+  } else {
+    row.appendChild(bAddF); row.appendChild(bAddD); row.appendChild(bDel);
+    wrap.appendChild(row);
+    wrap.appendChild(kids);
+  }
+  return wrap;
+}
+
+// ---------- tree helpers ----------
+function demoTree(){
+  root = [{ type:'dir', name:'/', content:'', children:[
+    { type:'dir', name:'apps', content:'', children:[
+      { type:'dir', name:'com.example.hello', content:'', children:[
+        { type:'file', name:'app.apk', content:'MHIt4ping nothing4', children:[] }
+      ]}
+    ]},
+    { type:'dir', name:'src', content:'', children:[
+      { type:'file', name:'Main.kt', content:'fun main() { println("SFS!") }', children:[] }
+    ]}
+  ]}];
+  renderTree();
+}
+document.getElementById('loadDemo').onclick = ()=> demoTree();
+document.getElementById('clearTree').onclick = ()=> { root=[]; renderTree(); };
+document.getElementById('addFile').onclick = ()=> { root.push({type:'file',name:'file.bin',content:'',children:[]}); renderTree(); };
+document.getElementById('addDir').onclick  = ()=> { root.push({type:'dir',name:'dir',content:'',children:[]}); renderTree(); };
+
+// ---------- to FsNode ----------
+function toFsNode(n, isRoot){
+  const name = isRoot && n.name==='/' ? 'ROOT' : n.name;
+  if(n.type==='dir'){
+    const node = new window.FsNode(window.TYPE_DIR, strToBytes(name), null,
+      n.children.map(c=> toFsNode(c,false)));
+    return node;
+  }
+  return new window.FsNode(window.TYPE_FILE, strToBytes(name), strToBytes(n.content||''), []);
+}
+
+// ---------- package ----------
+function pack(signed){
+  try{
+    if(!root.length){ log('дерево пусто — добавьте узел'); return null; }
+    const fsnodes = root.map(r=> toFsNode(r,true));
+    let out;
+    if(signed){
+      const hex = document.getElementById('seedHex').value.trim();
+      if(hex.length!==64){ log('✖ для подписи нужен seed из 64 hex-символов'); return null; }
+      const seed = hexToBytes(hex);
+      const pub = window.Ed25519.pubkey(seed);
+      document.getElementById('pubOut').value = bytesToHex(pub);
+      out = window.FsParser.serialize(fsnodes, { seed });
+      log('✓ упаковано С ПОДПИСЬЮ ('+out.length+' байт)');
+    }else{
+      out = window.FsParser.serialize(fsnodes, {});
+      log('✓ упаковано БЕЗ подписи ('+out.length+' байт)');
+    }
+    // verify self
+    const r = window.FsParser.parse(out);
+    updateVerify(r);
+    return out;
+  }catch(e){ log('✖ ' + e.message); return null; }
+}
+
+document.getElementById('btnUnsigned').onclick = ()=> downloadBlob(pack(false),'tree-unsigned.sfs');
+document.getElementById('btnSigned').onclick   = ()=> downloadBlob(pack(true), 'tree-signed.sfs');
+
+function downloadBlob(data, name){
+  if(data==null) return;
+  const blob = new Blob([data], {type:'application/octet-stream'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  URL.revokeObjectURL(a.href);
+  log('⬇ скачан: '+name);
+}
+
+// ---------- load ----------
+const drop = document.getElementById('drop');
+drop.addEventListener('click', ()=> document.getElementById('file').click());
+drop.addEventListener('dragover', e=>{ e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', ()=> drop.classList.remove('over'));
+drop.addEventListener('drop', e=>{ e.preventDefault(); drop.classList.remove('over');
+  if(e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
+document.getElementById('file').addEventListener('change', e=>{ if(e.target.files[0]) loadFile(e.target.files[0]); });
+
+function loadFile(file){
+  const fr = new FileReader();
+  fr.onload = ()=>{
+    try{
+      const data = new Uint8Array(fr.result);
+      const r = window.FsParser.parse(data);
+      // rebuild tree
+      root = r.roots.map(rs=> fromFsNode(rs,true));
+      updateVerify(r);
+      log('✓ открыт '+file.name+': '+'v'+r.version+', узлов: '+countNodes(root));
+      renderTree();
+    }catch(e){ log('✖ '+e.message); }
+  };
+  fr.readAsArrayBuffer(file);
+}
+function fromFsNode(n, isRoot){
+  const name = n.nameString();
+  if(n.isDir()) return { type:'dir', name: (isRoot && name==='ROOT')?'/':name, content:'',
+    children: n.children.map(c=> fromFsNode(c,false)) };
+  return { type:'file', name, content: bytesToStr(n.content||new Uint8Array(0)), children:[] };
+}
+function countNodes(list){ return list.reduce((a,n)=> a + 1 + (n.children? countNodes(n.children):0), 0); }
+
+// ---------- verify ----------
+function updateVerify(r){
+  const el = document.getElementById('verifyResult');
+  const trustEl = document.getElementById('trustList').value.trim();
+  const trustedHex = trustEl ? hexToBytes(trustEl.split(/\s+/)[0]) : null;
+  if(!r) return;
+  el.innerHTML = '';
+  el.appendChild(pill(r.hashValid?'SHA-256 OK':'SHA-256 ОБНАРУЖЕНО ПОВРЕЖДЕНИЕ', r.hashValid?'ok':'bad'));
+  if(r.version>=2){
+    el.appendChild(pill(r.signatureValid?'подпись ВАЛИДНА':'подпись НЕДЕЙСТВИТЕЛЬНА', r.signatureValid?'ok':'bad'));
+    if(r.pubkey && r.pubkey.some(b=>b!==0)){
+      let trusted=false;
+      if(trustedHex) trusted = r.pubkey.length===trustedHex.length && r.pubkey.every((v,i)=>v===trustedHex[i]);
+      el.appendChild(pill(trusted?'издатель ДОВЕРЕН':'издатель НЕ в allowlist', trusted?'ok':'bad'));
+      log('signer_id : '+bytesToHex(r.signerId||[])+'\npubkey    : '+bytesToHex(r.pubkey));
+    } else {
+      log('издатель: архивы не подписан (unsigned)');
+    }
+  }
+}
+function pill(text, cls){ const s=document.createElement('span'); s.className='pill '+cls; s.textContent=text; return s; }
+function log(msg){ const st=document.getElementById('status'); st.textContent = (st.textContent? st.textContent+'\n':'')+msg; st.scrollTop=st.scrollHeight; }
+function clearStatus(){ document.getElementById('status').textContent=''; }
+
+// ---------- keys ----------
+document.getElementById('genSeed').onclick = ()=>{
+  const kp = window.Ed25519.generateKeyPair();
+  document.getElementById('seedHex').value = bytesToHex(kp.seed);
+  document.getElementById('pubOut').value   = bytesToHex(kp.publicKey);
+  clearStatus(); log('✓ сгенерирован новый ключ издателя');
+};
+document.getElementById('clrSeed').onclick = ()=>{
+  document.getElementById('seedHex').value='';
+  document.getElementById('pubOut').value='';
+  log('key cleared — упаковка будет unsigned');
+};
+document.getElementById('seedHex').addEventListener('input', ()=>{
+  const v=document.getElementById('seedHex').value.trim();
+  if(/^[0-9a-fA-F]{64}$/.test(v)){ document.getElementById('pubOut').value = bytesToHex(window.Ed25519.pubkey(hexToBytes(v))); }
+  else if(v===''){ document.getElementById('pubOut').value=''; }
+});
+document.getElementById('addTrust').onclick = ()=>{
+  const pub = document.getElementById('pubOut').value.trim();
+  if(!pub){ log('✖ нет публичного ключа'); return; }
+  const ta = document.getElementById('trustList');
+  ta.value = (ta.value.trim()? ta.value.trim()+'\n':'') + pub;
+  log('✓ pubkey добавлен в доверенные');
+};
+
+// ---------- key export / import ----------
+function currentPubHex(){
+  const seed = document.getElementById('seedHex').value.trim();
+  if(/^[0-9a-fA-F]{64}$/.test(seed)) return bytesToHex(window.Ed25519.pubkey(hexToBytes(seed)));
+  return document.getElementById('pubOut').value.trim();
+}
+function downloadText(text, name, mime){
+  const blob = new Blob([text], {type: mime||'application/octet-stream'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+document.getElementById('exportKey').onclick = ()=>{
+  const seed = document.getElementById('seedHex').value.trim();
+  if(!/^[0-9a-fA-F]{64}$/.test(seed)){ log('✖ сначала создайте/укажите seed'); return; }
+  const pub = currentPubHex();
+  const key = { format:'SFS-Ed25519-v1', seed, publicKey: pub, note:'secret seed — храните как приватный ключ' };
+  downloadText(JSON.stringify(key, null, 2), 'sfs-publisher-key.json', 'application/json');
+  log('✓ ключ экспортирован: sfs-publisher-key.json (seed секретный, не распространяйте!)');
+  log('  pubkey для allowlist: ' + pub);
+};
+document.getElementById('exportPub').onclick = ()=>{
+  const pub = currentPubHex();
+  if(!pub){ log('✖ нет публичного ключа'); return; }
+  downloadText(pub, 'publisher.pub');
+  log('✓ pubkey экспортирован: publisher.pub');
+};
+document.getElementById('importKey').onclick = ()=> document.getElementById('importKeyFile').click();
+document.getElementById('importKeyFile').addEventListener('change', (e)=>{
+  const f = e.target.files[0]; if(!f) return;
+  const fr = new FileReader();
+  fr.onload = ()=>{
+    try{
+      const text = fr.result;
+      let seed = '', pub = '';
+      if(f.name.endsWith('.json')){
+        const o = JSON.parse(text);
+        seed = (o.seed||'').trim();
+        pub  = (o.publicKey||'').trim();
+        if(!/^[0-9a-fA-F]{64}$/.test(seed)) throw new Error('нет 64-символьного seed в json');
+      } else {
+        // .pub / txt: сам hex
+        const hex = text.trim().split(/\s+/)[0];
+        if(/^[0-9a-fA-F]{64}$/.test(hex)) pub = hex;
+        else throw new Error('не похоже на hex-ключ');
+      }
+      if(pub && !/^[0-9a-fA-F]{64}$/.test(pub)) pub='';
+      document.getElementById('seedHex').value = seed;
+      document.getElementById('pubOut').value = pub;
+      if(pub){ const ta=document.getElementById('trustList'); if(ta.value.trim().split('\n').indexOf(pub)<0) ta.value=(ta.value.trim()?ta.value.trim()+'\n':'')+pub; }
+      log('✓ импортирован ключ: ' + (seed?'seed':'только pubkey') + ' → pubkey ' + pub.slice(0,8) + '…');
+    }catch(err){ log('✖ импорт ключа: ' + err.message); }
+  };
+  fr.readAsText(f);
+  e.target.value='';
+});
+
+// ---------- init ----------
+demoTree();
+clearStatus();
+log('SFS Studio готов. ed25519: ' + (typeof window.Ed25519.verify === 'function' ? 'ok' : 'нет') + ' · parser: ' + (typeof window.FsParser.serialize === 'function' ? 'ok' : 'нет'));
+</script>
+</body>
+</html>

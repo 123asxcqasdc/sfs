@@ -16,7 +16,7 @@
            background:linear-gradient(180deg,#161b22,#0f1115); }
   header h1 { margin:0; font-size:18px; letter-spacing:.5px; }
   header code { color:var(--accent); background:#0f1115; padding:2px 6px; border-radius:4px; }
-  main { display:grid; grid-template-columns:380px 1fr 380px; gap:14px; padding:14px; }
+  main { display:grid; grid-template-columns:380px 1fr; gap:14px; padding:14px; }
   @media (max-width:1100px){ main { grid-template-columns:1fr; } }
   .panel { background:var(--panel); border:1px solid var(--border); border-radius:8px;
            padding:12px 14px; margin-bottom:14px; }
@@ -33,16 +33,6 @@
   button.warn { background:transparent; color:var(--bad); border:1px solid var(--bad); }
   button:disabled { opacity:.4; cursor:not-allowed; }
   .mono { font-family:inherit; }
-  .tree-panel { overflow:auto; max-height:70vh; }
-  .node { margin:3px 0; padding-left:14px; border-left:1px dashed var(--border); }
-  .node-row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; background:#0d1117;
-              border:1px solid var(--border); border-radius:6px; padding:4px 6px; margin:2px 0; }
-  .node-row .kind { width:76px; }
-  .node-row input { flex:1; min-width:120px; }
-  .badge { display:inline-block; font-size:11px; padding:1px 6px; border-radius:10px;
-           background:var(--border); color:var(--muted); }
-  .badge.dir { background:#1f6feb33; color:#79c0ff; }
-  .badge.file { background:#3fb95033; color:#7ee787; }
   .status { font-size:12px; white-space:pre-wrap; word-break:break-all;
             background:#0d1117; border:1px solid var(--border); border-radius:6px;
             padding:8px; min-height:80px; max-height:300px; overflow:auto; }
@@ -144,19 +134,7 @@
     </div>
   </div>
 
-  <!-- ============================= TREE EDITOR ============================= -->
-  <div class="panel">
-    <h2>дерево (редактор)</h2>
-    <div>
-      <button type="button" id="addFile" class="ghost">+ файл</button>
-      <button type="button" id="addDir" class="ghost">+ каталог</button>
-      <button type="button" id="loadDemo" class="ghost">демо-дерево</button>
-      <button type="button" id="clearTree" class="warn">очистить</button>
-    </div>
-    <div class="tree-panel" id="treeView"></div>
-  </div>
-
-  <!-- ============================= INFO ============================= -->
+  <!-- ============================= FORMAT INFO ============================= -->
   <div class="panel">
     <h2>формат</h2>
     <p class="hint">
@@ -192,76 +170,7 @@ function bytesToHex(b){ return Array.from(b).map(x=>x.toString(16).padStart(2,'0
 
 // ---------- model / state ----------
 // node = { type: 'file'|'dir', name: string, content: string, children: node[] }
-let root = [{ type:'dir', name:'/', content:'', children:[] }];
-
-function currentNode(id){ return root[id]; }
-
-// ---------- tree rendering ----------
-function renderTree(){
-  const tv = document.getElementById('treeView');
-  tv.innerHTML = '';
-  root.forEach((node,i)=> tv.appendChild(renderNode(node, i)));
-  tv.addEventListener('expand', (e)=>{ e.target.parentElement.querySelector('.kids').style.display = e.target.parentElement.querySelector('.kids').style.display==='none'?'block':'none'; });
-}
-function renderNode(node, id){
-  const wrap = document.createElement('div'); wrap.className='node';
-  const row = document.createElement('div'); row.className='node-row';
-  const kind = document.createElement('span'); kind.className='badge '+(node.type==='dir'?'dir':'file');
-  kind.textContent = node.type==='dir'?'каталог':'файл';
-  const nameInput = document.createElement('input'); nameInput.type='text'; nameInput.value=node.name;
-  nameInput.addEventListener('input', ()=> node.name = nameInput.value);
-  row.appendChild(kind); row.appendChild(nameInput);
-
-  const bAddF = document.createElement('button'); bAddF.className='ghost'; bAddF.textContent='+ф';
-  bAddF.addEventListener('click', ()=> node.children.push({type:'file',name:'new.bin',content:'',children:[]}));
-  const bAddD = document.createElement('button'); bAddD.className='ghost'; bAddD.textContent='+д';
-  bAddD.addEventListener('click', ()=> node.children.push({type:'dir',name:'newdir',content:'',children:[]}));
-  const bDel = document.createElement('button'); bDel.className='warn'; bDel.textContent='✕';
-  bDel.addEventListener('click', ()=>{ if(node._rm) node._rm(); renderTree(); });
-
-  const kids = document.createElement('div'); kids.className='kids';
-  const kidsList = document.createElement('div');
-  node.children.forEach((c,i)=>{
-    const childWrap = renderNode(c, -1);
-    c._rm = ()=> node.children.splice(node.children.indexOf(c),1);
-    kidsList.appendChild(childWrap);
-  });
-  kids.appendChild(kidsList);
-
-  if(node.type==='file'){
-    const contentArea = document.createElement('textarea');
-    contentArea.rows=2; contentArea.placeholder='содержимое (любые символы, latin1)';
-    contentArea.value = node.content || '';
-    contentArea.addEventListener('input', ()=> node.content = contentArea.value);
-    row.appendChild(bAddF); row.appendChild(bDel);
-    wrap.appendChild(row);
-    wrap.appendChild(contentArea);
-  } else {
-    row.appendChild(bAddF); row.appendChild(bAddD); row.appendChild(bDel);
-    wrap.appendChild(row);
-    wrap.appendChild(kids);
-  }
-  return wrap;
-}
-
-// ---------- tree helpers ----------
-function demoTree(){
-  root = [{ type:'dir', name:'/', content:'', children:[
-    { type:'dir', name:'apps', content:'', children:[
-      { type:'dir', name:'com.example.hello', content:'', children:[
-        { type:'file', name:'app.apk', content:'MHIt4ping nothing4', children:[] }
-      ]}
-    ]},
-    { type:'dir', name:'src', content:'', children:[
-      { type:'file', name:'Main.kt', content:'fun main() { println("SFS!") }', children:[] }
-    ]}
-  ]}];
-  renderTree();
-}
-document.getElementById('loadDemo').onclick = ()=> demoTree();
-document.getElementById('clearTree').onclick = ()=> { root=[]; renderTree(); };
-document.getElementById('addFile').onclick = ()=> { root.push({type:'file',name:'file.bin',content:'',children:[]}); renderTree(); };
-document.getElementById('addDir').onclick  = ()=> { root.push({type:'dir',name:'dir',content:'',children:[]}); renderTree(); };
+let root = [];
 
 // ---------- to FsNode ----------
 function toFsNode(n, isRoot){
@@ -336,7 +245,6 @@ function loadFile(file){
       root = r.roots.map(rs=> fromFsNode(rs,true));
       updateVerify(r);
       log('✓ открыт '+file.name+': '+'v'+r.version+', узлов: '+countNodes(root));
-      renderTree();
     }catch(e){ log('✖ '+e.message); }
   };
   fr.readAsArrayBuffer(file);
@@ -459,8 +367,6 @@ function loadZipFile(file){
       resetVerify();
       clearStatus();
       log('✓ ZIP распакован: файлов '+entries.filter(x=>!x.isDir).length+', вложенность сохранена');
-      log('  имена/контент — сырые байты (latin1); дерево в редакторе можно править');
-      renderTree();
     }catch(e){ log('✖ ZIP: '+e.message); }
   };
   fr.readAsArrayBuffer(file);
@@ -589,7 +495,7 @@ document.getElementById('importKeyFile').addEventListener('change', (e)=>{
 });
 
 // ---------- init ----------
-demoTree();
+root = [];
 clearStatus();
 log('SFS Studio готов. ed25519: ' + (typeof window.Ed25519.verify === 'function' ? 'ok' : 'нет') + ' · parser: ' + (typeof window.FsParser.serialize === 'function' ? 'ok' : 'нет'));
 </script>

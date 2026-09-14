@@ -354,6 +354,7 @@ function countNodes(list){ return list.reduce((a,n)=> a + 1 + (n.children? count
 // методов 0/8/12/14/95 через window.ZipDec (см. zip-dec.js и vendor/*.js).
 // Имена и содержимое сохраняются как сырые байты (0x00-0xFF).
 async function parseZip(ab){
+  if(!window.ZipDec) throw new Error('не загружены распаковщики (zip-dec.js / vendor/ рядом с ui.html)');
   const dv = new DataView(ab);
   if(dv.byteLength < 22) throw new Error('слишком мал для ZIP');
   let eocd = -1;
